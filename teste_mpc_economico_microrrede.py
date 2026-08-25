@@ -14,7 +14,7 @@ from mpc_economico_microrrede import MPC_Economico
 if __name__ == "__main__":
 
     # ----------------------------------------------------------------- #
-    # Instanciamento da planta (mesmos parâmetros de test.py)
+    # Instanciamento da planta
     # ----------------------------------------------------------------- #
     painel = PainelFotovoltaicoVirtual(potencia_nominal_w=5000.0)
     bateria = BateriaVirtual(
@@ -34,17 +34,12 @@ if __name__ == "__main__":
     # Projeto do controlador: a própria MicrorredeVirtual (painel +
     # bateria + contabilidade de custo) é passada como "gerador de
     # predições" -- o controlador roda cópias dela para simular o futuro
-    # econômico, sem qualquer setpoint de SOC
-    # ----------------------------------------------------------------- #
-    # O horizonte de predição precisa ser longo o suficiente para o
-    # controlador "enxergar" o pico tarifário da noite (18h-21h) já
-    # quando decide carregar de madrugada -- com um horizonte curto
-    # (ex.: 10h) o MPC gasta a bateria cedo demais, sem saber que o
-    # preço vai subir mais à frente. Por isso aqui cobre-se o dia
-    # inteiro (24h).
+    # econômico.
+    # ----------------------------------------------------------------- #.
+    NUM_HORAS_SIMULACAO = 24 * 7
     HORIZONTE_PREDICAO = 24
     HORIZONTE_CONTROLE = 2
-    PESO_LAMBDA = 1e-8   # regularização leve, só para suavizar Delta_Pbat
+    PESO_LAMBDA = 1e-8
 
     controlador_mpc_economico = MPC_Economico(
         microrrede=microrrede,
@@ -55,32 +50,38 @@ if __name__ == "__main__":
         potencia_bateria_max_w=3000.0,
         delta_potencia_bateria_max_w=1000.0,
         soc_minimo=0.1,
-        soc_maximo=0.9,
+        soc_maximo=0.9
     )
 
     # ----------------------------------------------------------------- #
-    # Perfis sintéticos de 24h (perturbações e tarifas, iguais a test.py)
+    # Perfis sintéticos de 24h
     # ----------------------------------------------------------------- #
-    horas = np.arange(24)
+    horas = np.arange(NUM_HORAS_SIMULACAO)
     irradiancia_perfil = np.clip(800 * np.sin(np.pi * (horas - 6) / 12), 0, None)
     carga_perfil = 1500 + 500 * np.sin(np.pi * horas / 12)
 
-    preco_compra_perfil = np.where(
-        (horas >= 18) & (horas <= 21), 1.20,
-        np.where((horas >= 0) & (horas <= 5), 0.45, 0.75)
-    )
-    preco_venda_perfil = preco_compra_perfil * 0.6
-
-    def obter_previsao(perfil, hora_atual, horizonte):
-        """
-        Extrai a janela de previsão de comprimento 'horizonte' a partir da
-        hora atual, assumindo que o perfil diário se repete (previsão
-        perfeita) -- em uma aplicação real, viria de um módulo de
-        forecast de irradiância/carga/tarifa.
-        """
+    def obter_previsao_ciclica(perfil, hora_atual, horizonte):
         indices = (hora_atual + np.arange(horizonte)) % len(perfil)
         return perfil[indices]
 
+
+    def obter_previsao_tarifa(hora_atual, horizonte):
+        """
+        Previsão de TARIFA (preço de compra/venda), calculada diretamente
+        pela REGRA tarifária.
+        """
+        horas_futuras = (hora_atual + np.arange(horizonte)) % 24
+
+        preco_compra = np.where(
+            (horas_futuras >= 18) & (horas_futuras <= 21), 1.20,
+            np.where((horas_futuras >= 0) & (horas_futuras <= 5), 0.45, 0.75)
+        )
+        preco_venda = preco_compra * 0.6
+
+        return preco_compra, preco_venda
+        
+    preco_compra_perfil, preco_venda_perfil = obter_previsao_tarifa(0, NUM_HORAS_SIMULACAO)
+    
     # ----------------------------------------------------------------- #
     # Execução da simulação em malha fechada
     # ----------------------------------------------------------------- #
@@ -90,14 +91,13 @@ if __name__ == "__main__":
     potencia_bateria_anterior = 0.0
 
     for h in horas:
-        irradiancia_futura = obter_previsao(irradiancia_perfil, h, HORIZONTE_PREDICAO)
-        carga_futura = obter_previsao(carga_perfil, h, HORIZONTE_PREDICAO)
-        preco_compra_futuro = obter_previsao(preco_compra_perfil, h, HORIZONTE_PREDICAO)
-        preco_venda_futuro = obter_previsao(preco_venda_perfil, h, HORIZONTE_PREDICAO)
+        irradiancia_futura = obter_previsao_ciclica(irradiancia_perfil, h, HORIZONTE_PREDICAO)
+        carga_futura = obter_previsao_ciclica(carga_perfil, h, HORIZONTE_PREDICAO)
+        preco_compra_futuro, preco_venda_futuro = obter_previsao_tarifa(h, HORIZONTE_PREDICAO)
 
         # 1) Controlador econômico: simula o próprio modelo da microrrede
         #    internamente e calcula a potência de referência que minimiza
-        #    o custo previsto (sem nenhum setpoint de SOC)
+        #    o custo previsto
         potencia_bateria_referencia_w = controlador_mpc_economico.calcular_u(
             potencia_bateria_anterior=potencia_bateria_anterior,
             irradiancia_futura_w_m2=irradiancia_futura,
@@ -157,7 +157,7 @@ if __name__ == "__main__":
     axs[2].plot(horas, preco_venda_perfil, label='Tarifa de Venda (R$/kWh)', color='seagreen',
                 marker='s', linestyle='None')
     axs[2].set_title('Tarifas (o controlador decide quando carregar/descarregar em função delas)')
-    axs[2].set_xlabel('Horas do Dia (h)')
+    axs[2].set_xlabel('Horas da Simulacao (h)')
     axs[2].legend()
     axs[2].grid(True, linestyle=':', alpha=0.7)
 
@@ -187,7 +187,7 @@ if __name__ == "__main__":
 
     ax2.axhline(0, color='black', linewidth=1.5)
     ax2.set_title('Balanço Energético da Microrrede (MPC Econômico em Malha Fechada)', fontsize=12, fontweight='bold')
-    ax2.set_xlabel('Horas do Dia (h)')
+    ax2.set_xlabel('Horas da Simulacao (h)')
     ax2.set_ylabel('Potência (W)')
     ax2.legend(loc='center left', bbox_to_anchor=(1.02, 0.5))
     ax2.grid(True, axis='y', linestyle=':', alpha=0.7)
@@ -209,7 +209,7 @@ if __name__ == "__main__":
                  marker='o', linestyle='-')
     axs3[1].axhline(0, color='black', linewidth=1.0)
     axs3[1].set_title('Custo Acumulado da Microrrede (objetivo minimizado pelo MPC)')
-    axs3[1].set_xlabel('Horas do Dia (h)')
+    axs3[1].set_xlabel('Horas da Simulacao (h)')
     axs3[1].legend()
     axs3[1].grid(True, linestyle=':', alpha=0.7)
 

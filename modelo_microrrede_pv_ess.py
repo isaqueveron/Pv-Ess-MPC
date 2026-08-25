@@ -4,14 +4,6 @@ import numpy as np
 class BateriaVirtual:
     """
     Modelo virtual do Sistema de Armazenamento de Energia (ESS) por baterias.
-
-    Implementa a dinâmica do Estado de Carga (SOC) descrita pela Eq. (5.1) de
-    [14], considerando eficiências distintas para carga e descarga. A potência
-    de barramento da bateria (Pbat) é decomposta em sua parcela de carga
-    (Pbat,ch) e de descarga (Pbat,dis) através das relações lógicas P6/P7
-    (Tabela 5.2), aqui resolvidas de forma direta (determinística), já que em
-    malha aberta a potência de referência da bateria é uma entrada conhecida,
-    e não uma variável de decisão do otimizador.
     """
 
     def __init__(self,
@@ -28,11 +20,11 @@ class BateriaVirtual:
         Inicializa o modelo da bateria.
 
         Args:
-            capacidade_maxima_wh (float): Capacidade máxima de energia armazenável (Cmax_bat) [Wh].
-            eficiencia_carga (float): Eficiência de carga (eta_bat,ch), entre 0 e 1.
-            eficiencia_descarga (float): Eficiência de descarga (eta_bat,dis), entre 0 e 1.
-            potencia_maxima_carga_w (float): Potência máxima de carga (Pmin_bat, valor negativo) [W].
-            potencia_maxima_descarga_w (float): Potência máxima de descarga (Pmax_bat, valor positivo) [W].
+            capacidade_maxima_wh (float): Capacidade máxima de energia armazenável [Wh].
+            eficiencia_carga (float): Eficiência de carga, entre 0 e 1.
+            eficiencia_descarga (float): Eficiência de descarga, entre 0 e 1.
+            potencia_maxima_carga_w (float): Potência máxima de carga [W].
+            potencia_maxima_descarga_w (float): Potência máxima de descarga [W].
             soc_minimo (float): Limite inferior de SOC permitido.
             soc_maximo (float): Limite superior de SOC permitido.
             soc_inicial (float): SOC inicial da bateria.
@@ -82,17 +74,7 @@ class BateriaVirtual:
     def separar_potencia_carga_descarga(self, potencia_bateria_referencia_w):
         """
         Decompõe a potência de referência da bateria em suas parcelas de
-        carga e descarga, equivalente às relações lógicas das Eqs. (5.2) a
-        (5.11):
-
-            Pbat(t) <= 0  <=>  delta_ch(t) = 1   (Eq. 5.2)
-            Pbat,ch(t)  = -Pbat(t) * delta_ch(t)  (Eq. 5.5, produto misto P7)
-            Pbat,dis(t) =  Pbat(t) * delta_dis(t) (equivalente por Eq. 5.6)
-            delta_ch(t) + delta_dis(t) = 1        (Eq. 5.7)
-
-        Em malha aberta essas relações não precisam ser tratadas como
-        restrições MILP: como Pbat já é conhecido, delta_ch e delta_dis saem
-        diretamente do sinal de Pbat.
+        carga e descarga.
         """
 
         if potencia_bateria_referencia_w <= 0.0:
@@ -109,7 +91,7 @@ class BateriaVirtual:
 
     def atualizar_soc(self, potencia_carga_w, potencia_descarga_w):
         """
-        Atualiza o SOC de acordo com a Eq. (5.1):
+        Atualiza o SOC de acordo com a Eq.:
 
             SOC(t+1) = SOC(t) + eta_ch * Pch(t) * Ts / Cmax
                                + Pdis(t) * Ts / (eta_dis * Cmax)
@@ -221,16 +203,8 @@ class PainelFotovoltaicoVirtual:
 
 class MicrorredeVirtual:
     """
-    Modelo de planta (Plant Model) da microrrede simplificada, contendo
-    apenas geração fotovoltaica e armazenamento por bateria (sem hidrogênio
-    e sem geração eólica).
-
-    Por enquanto o sistema é simulado em MALHA ABERTA: a potência de
-    despacho da bateria (Psch_bat) é fornecida externamente (perfil de teste
-    ou cronograma pré-definido), e não calculada por um otimizador MPC. A
-    camada de decisão (MPC Híbrido / MLD) poderá ser conectada
-    posteriormente, substituindo a fonte do sinal potencia_bateria_referencia_w
-    pela saída do controlador terciário.
+    Modelo de planta da microrrede simplificada, contendo
+    geração fotovoltaica e armazenamento por bateria.
     """
 
     def __init__(self,
@@ -293,7 +267,7 @@ class MicrorredeVirtual:
                                   preco_compra_reais_kwh=0.0,
                                   preco_venda_reais_kwh=0.0):
         """
-        Executa um passo de simulação da microrrede em malha aberta.
+        Executa um passo de simulação da microrrede.
 
         Balanço de potência instantâneo da microrrede:
 
