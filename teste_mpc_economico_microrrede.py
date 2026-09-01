@@ -16,13 +16,13 @@ if __name__ == "__main__":
     # ----------------------------------------------------------------- #
     # Instanciamento da planta
     # ----------------------------------------------------------------- #
-    painel = PainelFotovoltaicoVirtual(potencia_nominal_w=5000.0)
+    painel = PainelFotovoltaicoVirtual(potencia_nominal_w=425e3)
     bateria = BateriaVirtual(
-        capacidade_maxima_wh=10000.0,
+        capacidade_maxima_wh=900e3,
         eficiencia_carga=0.95,
         eficiencia_descarga=0.95,
-        potencia_maxima_carga_w=3000.0,
-        potencia_maxima_descarga_w=3000.0,
+        potencia_maxima_carga_w=300e3,
+        potencia_maxima_descarga_w=300e3,
         soc_minimo=0.0,
         soc_maximo=1.0,
         soc_inicial=0.5,
@@ -39,16 +39,16 @@ if __name__ == "__main__":
     NUM_HORAS_SIMULACAO = 24 * 7
     HORIZONTE_PREDICAO = 24
     HORIZONTE_CONTROLE = 2
-    PESO_LAMBDA = 1e-8
+    PESO_LAMBDA = 1e-10
 
     controlador_mpc_economico = MPC_Economico(
         microrrede=microrrede,
         horizonte_predicao=HORIZONTE_PREDICAO,
         horizonte_controle=HORIZONTE_CONTROLE,
         peso_lambda=PESO_LAMBDA,
-        potencia_bateria_min_w=-3000.0,
-        potencia_bateria_max_w=3000.0,
-        delta_potencia_bateria_max_w=1000.0,
+        potencia_bateria_min_w=-300e3,
+        potencia_bateria_max_w=300e3,
+        delta_potencia_bateria_max_w=100e3,
         soc_minimo=0.1,
         soc_maximo=0.9
     )
@@ -58,7 +58,24 @@ if __name__ == "__main__":
     # ----------------------------------------------------------------- #
     horas = np.arange(NUM_HORAS_SIMULACAO)
     irradiancia_perfil = np.clip(800 * np.sin(np.pi * (horas - 6) / 12), 0, None)
-    carga_perfil = 1500 + 500 * np.sin(np.pi * horas / 12)
+    
+    def gerar_perfil_carga_cmd01(num_horas_simulacao):
+        # Perfil-base de 24h [kW] -- ver tabela de justificativa
+        perfil_base_kw = np.array([
+            150, 140, 130, 125, 125, 130,   # 00h-05h (madrugada/vale)
+            150, 200, 260, 290, 310, 380,   # 06h-11h (rampa + pico almoço)
+            420, 400, 340, 280, 260, 280,   # 12h-17h (almoço + tarde)
+            340, 370, 360, 320, 220, 180,   # 18h-23h (ponta/jantar + declínio)
+        ])
+
+        perfil_base_w = perfil_base_kw * 1000.0
+
+        indices = np.arange(num_horas_simulacao) % len(perfil_base_w)
+        carga_perfil_w = perfil_base_w[indices]
+
+        return carga_perfil_w
+        
+    carga_perfil = gerar_perfil_carga_cmd01(NUM_HORAS_SIMULACAO)
 
     def obter_previsao_ciclica(perfil, hora_atual, horizonte):
         indices = (hora_atual + np.arange(horizonte)) % len(perfil)
@@ -73,10 +90,10 @@ if __name__ == "__main__":
         horas_futuras = (hora_atual + np.arange(horizonte)) % 24
 
         preco_compra = np.where(
-            (horas_futuras >= 18) & (horas_futuras <= 21), 1.20,
-            np.where((horas_futuras >= 0) & (horas_futuras <= 5), 0.45, 0.75)
+            (horas_futuras >= 18) & (horas_futuras <= 21), 1.98,
+            np.where((horas_futuras >= 0) & (horas_futuras <= 5), 0.58, 0.58)
         )
-        preco_venda = preco_compra * 0.6
+        preco_venda = preco_compra * 0.0
 
         return preco_compra, preco_venda
         
