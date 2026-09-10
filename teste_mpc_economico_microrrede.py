@@ -2,15 +2,22 @@ import numpy as np
 import matplotlib.pyplot as plt
 import random as rd
 
+# Planta REAL (não-linear, com eficiências de carga/descarga distintas)
 from modelo_microrrede_pv_ess import (
     PainelFotovoltaicoVirtual,
     BateriaVirtual,
     MicrorredeVirtual,
 )
-from mpc_economico_microrrede import MPC_Economico
+
+from mpc_economico_microrrede_gpc import MPC_Economico
 
 # --------------------------------------------------------------------------- #
-# EXEMPLO DE USO EM MALHA FECHADA: MPC ECONÔMICO (MINIMIZA CUSTO)
+# EXEMPLO DE USO EM MALHA FECHADA: GPC ECONÔMICO (MINIMIZA CUSTO)
+#
+# A planta real (não-linear) é simulada com modelo_microrrede_pv_ess.
+# O MPC (GPC) não instancia mais nenhum objeto de modelo -- ele carrega
+# seu próprio preditor linear internamente, a partir dos parâmetros
+# escalares passados no construtor.
 # --------------------------------------------------------------------------- #
 if __name__ == "__main__":
 
@@ -20,8 +27,8 @@ if __name__ == "__main__":
     painel = PainelFotovoltaicoVirtual(potencia_nominal_w=400e3)
     bateria = BateriaVirtual(
         capacidade_maxima_wh=874e3,
-        eficiencia_carga=0.88,
-        eficiencia_descarga=0.94,
+        eficiencia_carga=0.50,
+        eficiencia_descarga=1.0,
         potencia_maxima_carga_w=294e3,
         potencia_maxima_descarga_w=314e3,
         soc_minimo=0.0,
@@ -32,24 +39,9 @@ if __name__ == "__main__":
     microrrede = MicrorredeVirtual(painel, bateria, passo_tempo_segundos=3600.0)
 
     # ----------------------------------------------------------------- #
-    # Instanciamento da planta para o mpc (Predição - ligeiramente diferente)
-    # ----------------------------------------------------------------- #
-    painel_mpc = PainelFotovoltaicoVirtual(potencia_nominal_w=425e3)
-    bateria_mpc = BateriaVirtual(
-        capacidade_maxima_wh=900e3,
-        eficiencia_carga=0.95,
-        eficiencia_descarga=0.95,
-        potencia_maxima_carga_w=300e3,
-        potencia_maxima_descarga_w=300e3,
-        soc_minimo=0.0,
-        soc_maximo=1.0,
-        soc_inicial=0.5,
-        passo_tempo_segundos=3600.0,   # Ts = 1h
-    )
-    microrrede_mpc = MicrorredeVirtual(painel_mpc, bateria_mpc, passo_tempo_segundos=3600.0)
-    
-    # ----------------------------------------------------------------- #
-    # Projeto do controlador MPC
+    # Projeto do controlador GPC econômico -- parâmetros do preditor
+    # interno (levemente diferentes da planta real, como já era o caso
+    # antes: o MPC não conhece os parâmetros exatos da planta real).
     # ----------------------------------------------------------------- #
     NUM_HORAS_SIMULACAO = 24 * 7
     HORIZONTE_PREDICAO = 24
@@ -57,13 +49,18 @@ if __name__ == "__main__":
     PESO_LAMBDA = 5e-9
 
     controlador_mpc_economico = MPC_Economico(
-        microrrede=microrrede_mpc,
+        capacidade_maxima_bateria_wh=900e3,
+        eficiencia_carga=0.95,
+        eficiencia_descarga=0.95,
+        potencia_nominal_pv_w=425e3,
         horizonte_predicao=HORIZONTE_PREDICAO,
         horizonte_controle=HORIZONTE_CONTROLE,
         peso_lambda=PESO_LAMBDA,
         potencia_bateria_min_w=-300e3,
         potencia_bateria_max_w=300e3,
         delta_potencia_bateria_max_w=100e3,
+        irradiancia_referencia_w_m2=1000.0,
+        passo_tempo_segundos=3600.0,
         soc_minimo=0.1,
         soc_maximo=0.9,
         peso_penalidade_soc=1e7
@@ -72,15 +69,21 @@ if __name__ == "__main__":
     # ----------------------------------------------------------------- #
     # Perfis: Criação da Base (Predição) e da Realidade (Planta)
     # ----------------------------------------------------------------- #
-    horas = np.arange(NUM_HORAS_SIMULACAO)
-    
     # 1. Irradiância: Base vs Real
-    irradiancia_predicao = np.clip(800 * np.sin(np.pi * (horas - 6) / 12), 0, None)
-    
-    # Adicionando ruído para a realidade (simulando nuvens/variações)
+    horas = np.arange(NUM_HORAS_SIMULACAO)
+    dias = horas // 24
+    num_dias = dias[-1] + 1
+
+    # Um valor de base novo por DIA (sorteado uma vez por dia, não por hora)
+    base_por_dia = 800 * np.random.normal(1.0, 0.4, num_dias)
+    # Expande cada valor diário para as 24 horas correspondentes daquele dia
+    base = base_por_dia[dias]
+
+    irradiancia_predicao = np.clip(base * np.sin(np.pi * (horas - 6) / 12), 0, None)
+
+    # Ruído sempre presente, hora a hora, em cima da base do dia
     ruido_irrad = np.random.normal(1.0, 0.2, NUM_HORAS_SIMULACAO)
-    irradiancia_real = np.clip(irradiancia_predicao*ruido_irrad, 0, None)
-    # Zera a irradiância real à noite (onde a predição também é zero)
+    irradiancia_real = np.clip(irradiancia_predicao * ruido_irrad, 0, None)
     irradiancia_real[irradiancia_predicao == 0] = 0
 
     # 2. Carga: Base vs Real
@@ -90,25 +93,25 @@ if __name__ == "__main__":
             150, 200, 260, 290, 310, 380,   # 06h-11h
             420, 400, 340, 280, 260, 280,   # 12h-17h
             340, 370, 360, 320, 220, 180,   # 18h-23h
-        ])
+        ])/10
+        
         perfil_base_w = perfil_base_kw * 1000.0
         indices = np.arange(num_horas_simulacao) % len(perfil_base_w)
         return perfil_base_w[indices]
         
     carga_predicao = gerar_perfil_carga_base(NUM_HORAS_SIMULACAO)
     
-    # Adicionando ruído aleatório para a carga real (máquinas ligando/desligando)
-    ruido_carga = np.random.normal(0, 20000, NUM_HORAS_SIMULACAO)
+    ruido_carga = np.random.normal(0, 20000/10, NUM_HORAS_SIMULACAO)
     carga_real = carga_predicao + ruido_carga
 
     # 3. Tarifas
     def obter_previsao_tarifa(hora_atual, horizonte):
         horas_futuras = (hora_atual + np.arange(horizonte)) % 24
-        preco_compra = np.where(
+        preco_venda = np.where(
             (horas_futuras >= 18) & (horas_futuras <= 21), 1.98,
             np.where((horas_futuras >= 0) & (horas_futuras <= 5), 0.58, 0.58)
         )
-        preco_venda = preco_compra * 0.0
+        preco_compra = np.ones(horizonte) * 3.0
         return preco_compra, preco_venda
         
     preco_compra_perfil, preco_venda_perfil = obter_previsao_tarifa(0, NUM_HORAS_SIMULACAO)
@@ -124,15 +127,18 @@ if __name__ == "__main__":
     hist_custo_instantaneo, hist_custo_acumulado = [], []
 
     potencia_bateria_anterior = 0.0
+    soc_atual = bateria.get_soc()  # SOC inicial medido da planta real
 
     for h in horas:
-        # MPC ENXERGA APENAS A PREDIÇÃO (O que ele ACHA que vai acontecer)
         irradiancia_futura_mpc = obter_previsao_ciclica(irradiancia_predicao, h, HORIZONTE_PREDICAO)
         carga_futura_mpc = obter_previsao_ciclica(carga_predicao, h, HORIZONTE_PREDICAO)
         preco_compra_futuro, preco_venda_futuro = obter_previsao_tarifa(h, HORIZONTE_PREDICAO)
 
-        # 1) Controlador calcula a referência baseado nas predições perfeitas base
+        # 1) GPC calcula a referência a partir do SOC REAL medido
+        #    (realimentação de estado) + predições, usando seu preditor
+        #    linear interno (sem simular nenhum objeto de modelo)
         potencia_bateria_referencia_w = controlador_mpc_economico.calcular_u(
+            soc_atual=soc_atual,
             potencia_bateria_anterior=potencia_bateria_anterior,
             irradiancia_futura_w_m2=irradiancia_futura_mpc,
             carga_futura_w=carga_futura_mpc,
@@ -140,7 +146,8 @@ if __name__ == "__main__":
             preco_venda_futuro_reais_kwh=preco_venda_futuro,
         )
 
-        # 2) Planta real SENTE AS VARIÁVEIS REAIS (com ruído) e executa a ação do MPC
+        # 2) Planta REAL (não-linear) SENTE AS VARIÁVEIS REAIS (com ruído)
+        #    e executa a ação calculada pelo GPC
         resultado = microrrede.executar_passo_simulacao(
             irradiancia_w_m2=irradiancia_real[h],
             potencia_carga_consumidora_w=carga_real[h],
@@ -150,6 +157,7 @@ if __name__ == "__main__":
         )
 
         potencia_bateria_anterior = resultado['potencia_bateria_w']
+        soc_atual = resultado['soc_bateria']  # realimenta o SOC medido para a próxima chamada
 
         hist_pv.append(resultado['potencia_pv_w'])
         hist_bat.append(resultado['potencia_bateria_w'])
@@ -245,7 +253,6 @@ if __name__ == "__main__":
     # =========================================================================
     fig4, axs4 = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
 
-    # Plot 1: Irradiância (Predição vs Real)
     axs4[0].plot(horas, irradiancia_predicao, label='Predição do MPC (Base limpa)', color='orange', linewidth=2)
     axs4[0].plot(horas, irradiancia_real, label='Planta Real (Com variação)', color='red', linestyle='--', alpha=0.8)
     axs4[0].set_title('Irradiância: Expectativa do MPC vs O que a Planta Sentiu')
@@ -253,7 +260,6 @@ if __name__ == "__main__":
     axs4[0].legend()
     axs4[0].grid(True, linestyle=':', alpha=0.7)
 
-    # Plot 2: Carga (Predição vs Real)
     axs4[1].plot(horas, carga_predicao, label='Predição do MPC (Base limpa)', color='blue', linewidth=2)
     axs4[1].plot(horas, carga_real, label='Planta Real (Com variação)', color='purple', linestyle='--', alpha=0.8)
     axs4[1].set_title('Carga (Demanda): Expectativa do MPC vs O que a Planta Sentiu')
@@ -264,7 +270,6 @@ if __name__ == "__main__":
     
     plt.tight_layout()
     
-    # Mostra todos os gráficos juntos
     plt.show()
 
     # Resumo econômico
