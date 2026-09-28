@@ -9,7 +9,7 @@ from modelo_microrrede_pv_ess import (
     MicrorredeVirtual,
 )
 
-from mpc_economico_microrrede_gpc import MPC_Economico
+from mpc_economico_microrrede import MPC_Economico
 
 # --------------------------------------------------------------------------- #
 # EXEMPLO DE USO EM MALHA FECHADA: GPC ECONÔMICO (MINIMIZA CUSTO)
@@ -43,7 +43,7 @@ if __name__ == "__main__":
     # interno (levemente diferentes da planta real, como já era o caso
     # antes: o MPC não conhece os parâmetros exatos da planta real).
     # ----------------------------------------------------------------- #
-    NUM_HORAS_SIMULACAO = 24 * 7
+    NUM_HORAS_SIMULACAO = 24 * 3
     HORIZONTE_PREDICAO = 24
     HORIZONTE_CONTROLE = 12
     PESO_LAMBDA = 5e-9
@@ -93,7 +93,7 @@ if __name__ == "__main__":
             150, 200, 260, 290, 310, 380,   # 06h-11h
             420, 400, 340, 280, 260, 280,   # 12h-17h
             340, 370, 360, 320, 220, 180,   # 18h-23h
-        ])/10
+        ])
         
         perfil_base_w = perfil_base_kw * 1000.0
         indices = np.arange(num_horas_simulacao) % len(perfil_base_w)
@@ -101,17 +101,17 @@ if __name__ == "__main__":
         
     carga_predicao = gerar_perfil_carga_base(NUM_HORAS_SIMULACAO)
     
-    ruido_carga = np.random.normal(0, 20000/10, NUM_HORAS_SIMULACAO)
+    ruido_carga = np.random.normal(0, 20000, NUM_HORAS_SIMULACAO)
     carga_real = carga_predicao + ruido_carga
 
     # 3. Tarifas
     def obter_previsao_tarifa(hora_atual, horizonte):
         horas_futuras = (hora_atual + np.arange(horizonte)) % 24
-        preco_venda = np.where(
-            (horas_futuras >= 18) & (horas_futuras <= 21), 1.98,
-            np.where((horas_futuras >= 0) & (horas_futuras <= 5), 0.58, 0.58)
-        )
-        preco_compra = np.ones(horizonte) * 3.0
+        preco_compra = np.where(
+            (horas_futuras >= 18) & (horas_futuras <= 21), 1.98, 0.58)
+
+        preco_venda = 0.6 * preco_compra
+        
         return preco_compra, preco_venda
         
     preco_compra_perfil, preco_venda_perfil = obter_previsao_tarifa(0, NUM_HORAS_SIMULACAO)
@@ -199,6 +199,7 @@ if __name__ == "__main__":
     axs[2].legend()
     axs[2].grid(True, linestyle=':', alpha=0.7)
     plt.tight_layout()
+    plt.savefig('Soc_Pot_bat_tarifas.svg',format='svg')
 
     # =========================================================================
     # FIGURA 2: Balanço Energético da Microrrede
@@ -228,6 +229,7 @@ if __name__ == "__main__":
     ax2.legend(loc='center left', bbox_to_anchor=(1.02, 0.5))
     ax2.grid(True, axis='y', linestyle=':', alpha=0.7)
     plt.tight_layout()
+    plt.savefig('Balanco_energetico.svg',format='svg')
 
     # =========================================================================
     # FIGURA 3: Custos
@@ -247,6 +249,7 @@ if __name__ == "__main__":
     axs3[1].legend()
     axs3[1].grid(True, linestyle=':', alpha=0.7)
     plt.tight_layout()
+    plt.savefig('Custo.svg',format='svg')
 
     # =========================================================================
     # FIGURA 4: PREDIÇÃO DO MPC vs REALIDADE DA PLANTA
@@ -267,8 +270,8 @@ if __name__ == "__main__":
     axs4[1].set_xlabel('Horas da Simulação (h)')
     axs4[1].legend()
     axs4[1].grid(True, linestyle=':', alpha=0.7)
-    
     plt.tight_layout()
+    plt.savefig('modelo_planta_expectativa.svg',format='svg')
     
     plt.show()
 
