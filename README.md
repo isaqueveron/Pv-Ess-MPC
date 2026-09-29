@@ -34,7 +34,7 @@ Simulação em malha fechada de 7 dias (168 h, passo de 1 h, seed 42) de uma mic
 - **Legenda:** *Plant SOC*: SOC real da bateria. Linhas horizontais em 10 % e 90 %: limites (soft) usados na penalidade do MPC.
 
 ### Fig. 4 – Potências nas primeiras 72 h (C2)
-![Potências](fig_power_72h.png)
+![Potências](https://raw.githubusercontent.com/isaqueveron/Pv-Ess-MPC/Gallo-Winery/fig_power_72h.png)
 
 - **Experimento:** balanço de potência da planta em 3 dias.
 - **Legenda:** *Load*: carga. *PV*: geração fotovoltaica. *Battery*: potência da bateria (+ descarga / − carga). *Grid*: potência da rede (+ importação / − exportação).
