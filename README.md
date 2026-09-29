@@ -22,25 +22,25 @@ Simulação em malha fechada de 7 dias (168 h, passo de 1 h, seed 42) de uma mic
 ## Figuras
 
 ### Fig. 2 – Net load previsto x realizado
-![Net load](fig_net_load_forecast.pdf)
+![Net load](fig_net_load_forecast.png)
 
 - **Experimento:** carga − geração PV, usando a previsão do MPC e a realização da planta.
 - **Legenda:** *Predicted (azul)*: previsão usada pelo MPC (PV assumido pelo controlador). *Realized (laranja)*: trajetória real da planta. A diferença entre as curvas é o erro de previsão + mismatch de PV.
 
 ### Fig. 3 – Estado de carga (C2)
-![SOC](fig_soc_closed_loop.pdf)
+![SOC](fig_soc_closed_loop.png)
 
 - **Experimento:** SOC medido da planta ao longo dos 7 dias com o controlador incerto.
 - **Legenda:** *Plant SOC*: SOC real da bateria. Linhas horizontais em 10 % e 90 %: limites (soft) usados na penalidade do MPC.
 
 ### Fig. 4 – Potências nas primeiras 72 h (C2)
-![Potências](fig_power_72h.pdf)
+![Potências](fig_power_72h.png)
 
 - **Experimento:** balanço de potência da planta em 3 dias.
 - **Legenda:** *Load*: carga. *PV*: geração fotovoltaica. *Battery*: potência da bateria (+ descarga / − carga). *Grid*: potência da rede (+ importação / − exportação).
 
 ### Fig. 5 – Custo acumulado e economia vs. C0
-![Custo acumulado](fig_cumulative_cost_comparison.pdf)
+![Custo acumulado](fig_cumulative_cost_comparison.png)
 
 - **Experimento:** comparação econômica entre C0, C1 e C2 na semana.
 - **Legenda:**
@@ -53,7 +53,7 @@ Simulação em malha fechada de 7 dias (168 h, passo de 1 h, seed 42) de uma mic
 ## Executar
 
 ```bash
-python teste_mpc_economico_microrrede_novo.py
+python teste_mpc_economico_microrrede.py
 ```
 
 Gera os PDFs e PNGs das 4 figuras e imprime as métricas da Tabela II (`E_imp`, `E_exp`, custos, picos, `E_thr`, faixa de SOC).
