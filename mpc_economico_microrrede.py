@@ -1,10 +1,6 @@
 import numpy as np
 from scipy.optimize import minimize
 
-
-# --------------------------------------------------------------------------- #
-# GPC ECONÔMICO -- PREDIÇÃO MATRICIAL (DYNAMIC MATRIX), CUSTO EM R$
-# --------------------------------------------------------------------------- #
 class MPC_Economico:
     def __init__(self,
                  capacidade_maxima_bateria_wh,
@@ -21,7 +17,10 @@ class MPC_Economico:
                  passo_tempo_segundos=3600.0,
                  soc_minimo=0.0,
                  soc_maximo=1.0,
-                 peso_penalidade_soc=1e6):
+                 peso_penalidade_soc=1e6 # peso_penalidade_soc usado para restringir o soc aos limites usando
+                                         # a funcao custo sem causar infactibilidade
+                                         # substituir por restricoes soft
+                ):
 
         N2, Nu = horizonte_predicao, horizonte_controle
 
@@ -32,6 +31,14 @@ class MPC_Economico:
         self.potencia_bateria_min_w = potencia_bateria_min_w
         self.potencia_bateria_max_w = potencia_bateria_max_w
         self.delta_potencia_bateria_max_w = delta_potencia_bateria_max_w
+        
+        if not (0.0 <= soc_minimo <= 1.0):
+            raise ValueError(f"soc_minimo deve estar no intervalo [0.0, 1.0]. Valor recebido: {soc_minimo}")
+        if not (0.0 <= soc_maximo <= 1.0):
+            raise ValueError(f"soc_maximo deve estar no intervalo [0.0, 1.0]. Valor recebido: {soc_maximo}")
+        if soc_minimo > soc_maximo:
+            raise ValueError(f"soc_minimo ({soc_minimo}) não pode ser maior que soc_maximo ({soc_maximo}).")
+
         self.soc_minimo = soc_minimo
         self.soc_maximo = soc_maximo
         self.peso_penalidade_soc = peso_penalidade_soc
@@ -46,8 +53,7 @@ class MPC_Economico:
         
         passo_horas = self._passo_tempo_segundos / 3600.0
         self._ganho_soc_k = -(passo_horas) / capacidade_maxima_bateria_wh
-
-        # --- Matrizes GPC --- #
+        
         self._matriz_m                  = self._construir_matriz_dinamica_potencia(N2, Nu)
         self._matriz_l2                 = np.tril(np.ones((N2, N2)))
         self._matriz_soma_cumulativa_nu = np.tril(np.ones((Nu, Nu)))
@@ -58,10 +64,7 @@ class MPC_Economico:
     # Getters (para inspeção/depuração do preditor interno)
     # ------------------------------------------------------------------ #
     def get_ganho_soc_k(self):    return self._ganho_soc_k
-
-    # ------------------------------------------------------------------ #
-    # Construção da matriz dinâmica M (núcleo do GPC)
-    # ------------------------------------------------------------------ #
+        
     @staticmethod
     def _construir_matriz_dinamica_potencia(N2, Nu):
         M = np.zeros((N2, Nu))
@@ -71,9 +74,9 @@ class MPC_Economico:
         return M
 
     # ------------------------------------------------------------------ #
-    # Núcleo da predição:
+    # Núcleo da predição modelo de equacao a diferencas:
     # ------------------------------------------------------------------ #
-    def _predizer_trajetorias_virtual_for(self, 
+    def _predizer_trajetorias_virtual_for(self,
                                   soc_atual, 
                                   potencia_virtual_anterior, 
                                   irradiancia_futura_w_m2, 

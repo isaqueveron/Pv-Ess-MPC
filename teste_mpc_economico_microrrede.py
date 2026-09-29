@@ -63,10 +63,11 @@ def run_case(caso, horas, irr_pred, irr_real, carga_pred, carga_real, buy_real, 
     HORIZONTE_CONTROLE = 12
     PESO_LAMBDA = 5e-9
 
-    # PARÂMETROS DA PLANTA REAL (UFSC CMD01)
-    PLANTA_PV = 495e3
-    PLANTA_CAP = 900e3
-    PLANTA_PCS = 300e3
+    # PARÂMETROS DA PLANTA REAL (Baseado no modelo C&I de 4 Horas)
+    # E. & J. Gallo Winery Energy Storage
+    PLANTA_PV = 2000e3   # 2.0 MW de PV (garante excedente diurno maciço)
+    PLANTA_CAP = 4000e3  # 4.0 MWh de Bateria (banco de 4 horas)
+    PLANTA_PCS = 1000e3  # Inversor da bateria de 1.0 MW (1000 kW)
     PLANTA_EFF = 0.90
     
     painel = PainelFotovoltaicoVirtual(potencia_nominal_w=PLANTA_PV)
@@ -85,10 +86,10 @@ def run_case(caso, horas, irr_pred, irr_real, carga_pred, carga_real, buy_real, 
             potencia_nominal_pv_w=PLANTA_PV, potencia_bateria_min_w=-PLANTA_PCS, potencia_bateria_max_w=PLANTA_PCS
         )
     else:
-        # C2 (Mismatch): Controlador superestima planta e baterias
+        # C2 (Mismatch): MPC acha que tem 2.2 MW de PV e 4.5 MWh de bateria
         params_mpc = dict(
-            capacidade_maxima_bateria_wh=950e3, eficiencia_carga=0.98, eficiencia_descarga=0.98,
-            potencia_nominal_pv_w=520e3, potencia_bateria_min_w=-PLANTA_PCS, potencia_bateria_max_w=PLANTA_PCS
+            capacidade_maxima_bateria_wh=4500e3, eficiencia_carga=0.86, eficiencia_descarga=0.98,
+            potencia_nominal_pv_w=2200e3, potencia_bateria_min_w=-PLANTA_PCS, potencia_bateria_max_w=PLANTA_PCS
         )
 
     controlador = MPC_Economico(
@@ -105,6 +106,20 @@ def run_case(caso, horas, irr_pred, irr_real, carga_pred, carga_real, buy_real, 
         soc_atual = bateria.get_soc()
         if caso == "C0":
             pref = 0.0
+        elif caso == "C3":
+            # Heurística Clássica (Rule-based BESS)
+            hh = h % 24
+            
+            # Estima a geração fotovoltaica atual
+            pot_pv_estimada_w = (irr_real[h] / 1000.0) * PLANTA_PV
+            excedente_w = pot_pv_estimada_w - carga_real[h]
+
+            if 18 <= hh <= 21:
+                pref = PLANTA_PCS  # Descarrega tudo no pico para lucro máximo
+            elif excedente_w > 0:
+                pref = -excedente_w  # Bateria absorve o excedente solar (carga é negativa)
+            else:
+                pref = 0.0  # Em repouso
         else:
             ih = obter_previsao_ciclica(irr_real if caso == "C1" else irr_pred, h, HORIZONTE_PREDICAO)
             lh = obter_previsao_ciclica(carga_real if caso == "C1" else carga_pred, h, HORIZONTE_PREDICAO)
@@ -157,7 +172,7 @@ if __name__ == "__main__":
     print("="*60)
     
     resultados = {}
-    for c in ("C0", "C1", "C2"):
+    for c in ("C0", "C1", "C2", "C3"):
         res_hist, micro = run_case(c, horas, irradiancia_predicao, irradiancia_real, 
                                    carga_predicao, carga_real, buy_real, sell_real)
         resultados[c] = res_hist
@@ -196,8 +211,8 @@ if __name__ == "__main__":
     # =========================================================================
     # 4. FIGURAS NO ESTILO DO ARTIGO (Figs. 2 a 5)
     # =========================================================================
-    PV_PLANTA_KW = 495.0   # PV da planta (mesmo valor de run_case)
-    PV_MPC_KW    = 520.0   # PV assumido pelo MPC no caso C2
+    PV_PLANTA_KW = 2000.0   # 2.0 MW (2000 kW)
+    PV_MPC_KW    = 2200.0
     FIGSIZE      = (6.4, 4.0)
     TICKS_168    = np.arange(0, 176, 25)
 
@@ -214,7 +229,7 @@ if __name__ == "__main__":
     plt.xticks(TICKS_168)
     plt.legend(loc='best')
     plt.tight_layout()
-    plt.savefig('fig_net_load_forecast.pdf')
+    plt.savefig('fig_net_load_forecast.png')
     plt.close()
 
     # ---- Fig. 3: SOC da planta (C2), em % ------------------------------------
@@ -228,41 +243,92 @@ if __name__ == "__main__":
     plt.ylim(0, 100)
     plt.legend(loc='best')
     plt.tight_layout()
-    plt.savefig('fig_soc_closed_loop.pdf')
+    plt.savefig('fig_soc_closed_loop.png')
     plt.close()
 
-    # ---- Fig. 4: potências (C2), 72 h, painel único ---------------------------
+    # ---- Fig. 4: Balanço de potências (C2), 72 h, barras sobrepostas ------------
     h72 = horas[:72]
-    load_kw = carga_real[:72] / 1000.0
-    pv_kw   = irradiancia_real[:72] * PV_PLANTA_KW / 1000.0
-    bat_kw  = resultados["C2"]["bat"][:72] / 1000.0    # + descarga
-    grid_kw = resultados["C2"]["grid"][:72] / 1000.0   # + importação
-    plt.figure(figsize=FIGSIZE)
-    plt.plot(h72, load_kw, color='tab:blue',   label='Load')
-    plt.plot(h72, pv_kw,   color='tab:orange', label='PV')
-    plt.plot(h72, bat_kw,  color='tab:green',  label='Battery')
-    plt.plot(h72, grid_kw, color='tab:red',    label='Grid')
-    plt.xlabel('Time (h)')
-    plt.ylabel('Power (kW)')
-    plt.xticks(np.arange(0, 80, 10))
-    plt.xlim(0, 72)
-    plt.legend(loc='best', ncol=2)
+    
+    # 1. Separar o que é positivo (Fonte) e negativo (Sumidouro/Consumo)
+    pv_kw = irradiancia_real[:72] * PV_PLANTA_KW / 1000.0
+    load_kw = -carga_real[:72] / 1000.0  
+    
+    bat_kw = resultados["C2"]["bat"][:72] / 1000.0
+    bat_descarga = np.maximum(bat_kw, 0)  
+    bat_carga = np.minimum(bat_kw, 0)     
+    
+    grid_kw = resultados["C2"]["grid"][:72] / 1000.0
+    grid_importacao = np.maximum(grid_kw, 0) 
+    grid_exportacao = np.minimum(grid_kw, 0) 
+
+    # 3. Criar a figura
+    fig, ax = plt.subplots(figsize=(8, 4.5)) # Proporção clássica 16:9 compacta
+    
+    largura_barra = 1.0
+    estilo_borda = {'edgecolor': 'white', 'linewidth': 0.4, 'zorder': 3}
+
+    cor_pv = '#E6A01D'       # Ouro/Amarelo Muted
+    cor_bat_desc = '#7FB97A' # Verde suave
+    cor_bat_carg = '#2A7A3E' # Verde escuro
+    cor_grid_imp = '#D9534F' # Vermelho/Coral (comprando, custo)
+    cor_grid_exp = '#5BC0DE' # Azul claro (vendendo, receita)
+    cor_carga = '#333333'    # Cinza escuro/Quase preto (Carga local base)
+    
+    # --- Empilhamento Positivo (Fontes) ---
+    ax.bar(h72, pv_kw, color=cor_pv, label='PV Generation', width=largura_barra, **estilo_borda)
+    ax.bar(h72, bat_descarga, bottom=pv_kw, color=cor_bat_desc, label='BESS Discharge', width=largura_barra, **estilo_borda)
+    ax.bar(h72, grid_importacao, bottom=pv_kw + bat_descarga, color=cor_grid_imp, label='Grid Import', width=largura_barra, **estilo_borda)
+    
+    # --- Empilhamento Negativo (Sumidouros) ---
+    ax.bar(h72, load_kw, color=cor_carga, label='Local Load', width=largura_barra, **estilo_borda)
+    ax.bar(h72, bat_carga, bottom=load_kw, color=cor_bat_carg, label='BESS Charge', width=largura_barra, **estilo_borda)
+    ax.bar(h72, grid_exportacao, bottom=load_kw + bat_carga, color=cor_grid_exp, label='Grid Export', width=largura_barra, **estilo_borda)
+    
+    ax.set_xlabel('Time (h)')
+    ax.set_ylabel('Power (kW)')
+    ax.axhline(0, color='black', linewidth=1.2, zorder=4)
+    ax.set_xlim(-0.5, 71.5)
+    ax.set_xticks(np.arange(0, 73, 12))
+    ax.grid(axis='y', linestyle='--', linewidth=0.5, alpha=0.7, zorder=0)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.legend(loc='center left', bbox_to_anchor=(1.02, 0.5), frameon=False)
+    
     plt.tight_layout()
-    plt.savefig('fig_power_72h.pdf')
+    plt.savefig('fig_power_72h.png', bbox_inches='tight') # Usar bbox_inches='tight' evita cortar a legenda
     plt.close()
 
     # ---- Fig. 5: custo acumulado (a) + economia acumulada vs C0 (b) ------------
     c0 = resultados["C0"]["cumcost"]
     c1 = resultados["C1"]["cumcost"]
     c2 = resultados["C2"]["cumcost"]
+    c3 = resultados["C3"]["cumcost"] # Extraindo dados do C3
+    
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6.4, 5.4), sharex=True,
                                    gridspec_kw={"height_ratios": [1.2, 1]})
+                                   
     ax1.plot(horas, c0, color='tab:blue',   label='C0: no BESS')
+    ax1.plot(horas, c3, color='tab:purple', label='C3: rule-based (Classic BESS)')
     ax1.plot(horas, c2, color='tab:orange', label='C2: uncertain/mismatched MPC')
     ax1.plot(horas, c1, color='tab:green',  label='C1: perfect/matched MPC')
     ax1.set_ylabel('Cumulative net cost (R$)')
     ax1.legend(loc='best')
     ax1.set_title('(a) Cumulative net cost', fontsize=10)
+
+    # Economia acumulada em relação ao C0 (positivo = BESS reduz o custo)
+    ax2.plot(horas, c0 - c3, color='tab:purple', label='C3: rule-based (Classic BESS)')
+    ax2.plot(horas, c0 - c2, color='tab:orange', label='C2: uncertain/mismatched MPC')
+    ax2.plot(horas, c0 - c1, color='tab:green',  label='C1: perfect/matched MPC')
+    ax2.axhline(0, color='gray', linewidth=0.8)
+    ax2.set_ylabel('Cumulative savings vs. C0 (R$)')
+    ax2.set_xlabel('Time (h)')
+    ax2.set_xticks(TICKS_168)
+    ax2.legend(loc='best')
+    ax2.set_title('(b) Savings relative to no BESS', fontsize=10)
+    
+    fig.tight_layout()
+    fig.savefig('fig_cumulative_cost_comparison.png')
+    plt.close(fig)
 
     # Economia acumulada em relação ao C0 (positivo = BESS reduz o custo)
     ax2.plot(horas, c0 - c2, color='tab:orange', label='C2: uncertain/mismatched MPC')
@@ -274,7 +340,7 @@ if __name__ == "__main__":
     ax2.legend(loc='best')
     ax2.set_title('(b) Savings relative to no BESS', fontsize=10)
     fig.tight_layout()
-    fig.savefig('fig_cumulative_cost_comparison.pdf')
+    fig.savefig('fig_cumulative_cost_comparison.png')
     plt.close(fig)
 
     print("As 4 figuras PDF (estilo do artigo) foram geradas no diretório.")
