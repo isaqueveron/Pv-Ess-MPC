@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.ticker import AutoMinorLocator, MultipleLocator
 import csv
 from datetime import datetime
 
@@ -9,6 +10,165 @@ from modelo_microrrede_pv_ess import (
     MicrorredeVirtual,
 )
 from mpc_economico_microrrede import MPC_Economico
+
+W1, W2 = 3.5, 7.16
+
+PV_PLANTA_KW = 2000.0
+PV_MPC_KW    = 2200.0
+TICKS_168    = np.arange(0, 169, 24)      # múltiplos de 24 h (dias)
+ 
+# Paleta Okabe-Ito (daltônicos) + estilos de linha distintos
+# (legível também em impressão P&B). Mesma cor por cenário em todas as figuras.
+COR = {"C0": "#000000", "C1": "#009E73", "C2": "#D55E00", "C3": "#CC79A7"}
+LS  = {"C0": (0, (4, 2)), "C1": "-", "C2": "-", "C3": "-."}
+LBL = {"C0": "C0: no BESS",
+       "C1": "C1: perfect/matched MPC",
+       "C2": "C2: uncertain/mismatched MPC",
+       "C3": "C3: rule-based (classic BESS)"}
+ 
+plt.rcParams.update({
+    "font.family": "serif",
+    "font.serif": ["Times New Roman", "STIXGeneral", "DejaVu Serif"],
+    "mathtext.fontset": "stix",
+    "font.size": 8,
+    "axes.labelsize": 8,
+    "axes.linewidth": 0.6,
+    "legend.fontsize": 7,
+    "xtick.labelsize": 7,
+    "ytick.labelsize": 7,
+    "xtick.direction": "in", "ytick.direction": "in",
+    "xtick.major.width": 0.6, "ytick.major.width": 0.6,
+    "xtick.minor.width": 0.4, "ytick.minor.width": 0.4,
+    "xtick.top": True, "ytick.right": True,
+    "lines.linewidth": 1.0,
+    "axes.grid": True,
+    "grid.color": "0.85", "grid.linewidth": 0.4, "grid.linestyle": "-",
+    "axes.axisbelow": True,
+    "legend.frameon": True, "legend.framealpha": 0.9,
+    "legend.edgecolor": "0.7", "legend.fancybox": False,
+    "legend.borderpad": 0.3, "legend.labelspacing": 0.25,
+    "legend.handlelength": 1.8,
+    "pdf.fonttype": 42, "ps.fonttype": 42,   # fontes embutidas (exigência IEEE)
+    "savefig.dpi": 600,
+})
+ 
+ 
+def finalizar(fig, nome):
+    fig.savefig(f"{nome}.pdf", bbox_inches="tight", pad_inches=0.02)
+    fig.savefig(f"{nome}_v2.png", bbox_inches="tight", pad_inches=0.02, dpi=600)
+    plt.close(fig)
+ 
+ 
+def eixo_tempo(ax, xmax=168):
+    ax.set_xlim(0, xmax)
+    ax.set_xticks(TICKS_168[TICKS_168 <= xmax])
+    ax.xaxis.set_minor_locator(MultipleLocator(12))
+ 
+ 
+def gerar_graficos(horas, carga_real, carga_predicao,
+                   irradiancia_real, irradiancia_predicao, resultados):
+ 
+    # ---- Fig. 2: Net load previsto x realizado (1 coluna) ----
+    net_pred_kw = carga_predicao / 1000.0 - irradiancia_predicao * PV_MPC_KW / 1000.0
+    net_real_kw = carga_real / 1000.0 - irradiancia_real * PV_PLANTA_KW / 1000.0
+ 
+    fig, ax = plt.subplots(figsize=(W1, 2.2))
+    ax.plot(horas, net_real_kw, color="#E69F00", lw=0.9, label="Realized plant net load")
+    ax.plot(horas, net_pred_kw, color="#0072B2", lw=0.9, ls="--", label="MPC predicted net load")
+    ax.axhline(0, color="0.3", lw=0.5)
+    ax.set_xlabel("Time (h)")
+    ax.set_ylabel("Net load (kW)")
+    eixo_tempo(ax)
+    ax.yaxis.set_minor_locator(AutoMinorLocator(2))
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, 1.22), ncol=2,
+              frameon=False, columnspacing=1.5)
+    finalizar(fig, "fig_net_load_forecast")
+ 
+    # ---- Fig. 3: SOC da planta (C2) (1 coluna) ----
+    fig, ax = plt.subplots(figsize=(W1, 2.0))
+    ax.axhspan(10, 90, color="#0072B2", alpha=0.07, lw=0)          # faixa operacional
+    ax.axhline(10, color="0.35", lw=0.7, ls="--")
+    ax.axhline(90, color="0.35", lw=0.7, ls="--", label="MPC SOC targets (10 % / 90 %)")
+    ax.plot(horas, resultados["C2"]["soc"] * 100, color="#0072B2", lw=1.0, label="Plant SOC")
+    ax.set_xlabel("Time (h)")
+    ax.set_ylabel("State of charge (%)")
+    ax.set_ylim(0, 100)
+    ax.yaxis.set_major_locator(MultipleLocator(20))
+    eixo_tempo(ax)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, 1.25), ncol=2,
+              frameon=False, columnspacing=1.5)
+    finalizar(fig, "fig_soc_closed_loop")
+ 
+        # ---- Fig. 4: Balanço de potências (C2), 72 h (1 coluna) ----
+    N = 72
+    pv_kw   = irradiancia_real[:N] * PV_PLANTA_KW / 1000.0
+    load_kw = -carga_real[:N] / 1000.0
+    bat_kw  = resultados["C2"]["bat"][:N] / 1000.0
+    grid_kw = resultados["C2"]["grid"][:N] / 1000.0
+    bat_desc, bat_carg = np.maximum(bat_kw, 0), np.minimum(bat_kw, 0)
+    grid_imp, grid_exp = np.maximum(grid_kw, 0), np.minimum(grid_kw, 0)
+
+    # Mesma paleta Okabe-Ito das demais figuras
+    C_PV, C_BD, C_GI = "#E69F00", "#009E73", "#D55E00"
+    C_LD, C_BC, C_GE = "#6E6E6E", "#0072B2", "#56B4E9"
+
+    x = np.arange(N + 1)                       # degraus horários (step="post")
+    def st(y): return np.append(y, y[-1])
+
+    # pilhas positiva (fontes) e negativa (cargas/sumidouros)
+    p0 = np.zeros(N)
+    p1 = pv_kw
+    p2 = p1 + bat_desc
+    p3 = p2 + grid_imp
+    n1 = load_kw
+    n2 = n1 + bat_carg
+    n3 = n2 + grid_exp
+
+    fig, ax = plt.subplots(figsize=(W1, 2.6))
+    fk = dict(step="post", linewidth=0, zorder=3)
+    ax.fill_between(x, st(p0), st(p1), color=C_PV, label="PV generation",  **fk)
+    ax.fill_between(x, st(p1), st(p2), color=C_BD, label="BESS discharge", **fk)
+    ax.fill_between(x, st(p2), st(p3), color=C_GI, label="Grid import",    **fk)
+    ax.fill_between(x, st(p0), st(n1), color=C_LD, label="Local load",     **fk)
+    ax.fill_between(x, st(n1), st(n2), color=C_BC, label="BESS charge",    **fk)
+    ax.fill_between(x, st(n2), st(n3), color=C_GE, label="Grid export",    **fk)
+
+    ax.axhline(0, color="black", lw=0.6, zorder=4)
+    ax.set_xlim(0, N)
+    ax.set_xticks(np.arange(0, N + 1, 12))
+    ax.xaxis.set_minor_locator(MultipleLocator(6))
+    ax.yaxis.set_minor_locator(AutoMinorLocator(2))
+    ax.set_xlabel("Time (h)")
+    ax.set_ylabel("Power (kW)")
+    ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=3,
+              frameon=False, columnspacing=1.0, handlelength=1.0,
+              handletextpad=0.4, fontsize=6.5)
+    finalizar(fig, "fig_power_72h")
+ 
+    # ---- Fig. 5: Custo acumulado (a) + economia vs C0 (b) (1 coluna) ----
+    cum = {k: resultados[k]["cumcost"] for k in ("C0", "C1", "C2", "C3")}
+    ordem_plot = ["C0", "C3", "C2", "C1"]
+ 
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(W1, 4.2), sharex=True,
+                                   gridspec_kw={"height_ratios": [1.15, 1], "hspace": 0.12})
+    for k in ordem_plot:
+        ax1.plot(horas, cum[k], color=COR[k], ls=LS[k], label=LBL[k])
+    ax1.set_ylabel("Cumulative net cost (R$)")
+    ax1.legend(loc="upper left", fontsize=6.5)
+    ax1.text(0.98, 0.04, "(a)", transform=ax1.transAxes, ha="right", va="bottom",
+             fontweight="bold", fontsize=8)
+ 
+    for k in ("C3", "C2", "C1"):
+        ax2.plot(horas, cum["C0"] - cum[k], color=COR[k], ls=LS[k], label=LBL[k])
+    ax2.axhline(0, color="0.4", lw=0.6)
+    ax2.set_ylabel("Savings vs. C0 (R$)")
+    ax2.set_xlabel("Time (h)")
+    ax2.text(0.98, 0.04, "(b)", transform=ax2.transAxes, ha="right", va="bottom",
+             fontweight="bold", fontsize=8)
+    eixo_tempo(ax2)
+    for a in (ax1, ax2):
+        a.yaxis.set_minor_locator(AutoMinorLocator(2))
+    finalizar(fig, "fig_cumulative_cost_comparison")
 
 # ----------------------------------------------------------------- #
 # 1. PREPARAÇÃO DE DADOS
@@ -204,130 +364,8 @@ if __name__ == "__main__":
         else:
             print("")
 
-    # ----------------------------------------------------------------- #
-    # 4. GERAÇÃO DOS GRÁFICOS (Padrão Acadêmico - IEEE/Elsevier)
-    # ----------------------------------------------------------------- #
-    PV_PLANTA_KW = 2000.0   
-    PV_MPC_KW    = 2200.0
-    FIGSIZE      = (6.4, 4.0)
-    TICKS_168    = np.arange(0, 176, 25)
-
-    plt.rcParams.update({
-        "font.family": "serif",
-        "font.serif": ["Times New Roman"],
-        "font.size": 11,
-        "axes.labelsize": 12,
-        "legend.fontsize": 10,
-        "xtick.labelsize": 10,
-        "ytick.labelsize": 10,
-        "axes.grid": False
-    })
-
-    # ---- Fig. 2: Net load previsto x realizado ----
-    net_pred_kw = carga_predicao / 1000.0 - irradiancia_predicao * PV_MPC_KW / 1000.0
-    net_real_kw = carga_real / 1000.0 - irradiancia_real * PV_PLANTA_KW / 1000.0
-    plt.figure(figsize=FIGSIZE)
-    plt.plot(horas, net_pred_kw, color='tab:blue',   label='MPC predicted net load')
-    plt.plot(horas, net_real_kw, color='tab:orange', label='Realized plant net load')
-    plt.xlabel('Time (h)')
-    plt.ylabel('Net load (kW)')
-    plt.xticks(TICKS_168)
-    plt.legend(loc='best')
-    plt.tight_layout()
-    plt.savefig('fig_net_load_forecast.pdf', bbox_inches='tight')
-    plt.savefig('fig_net_load_forecast.png', bbox_inches='tight')
-    plt.close()
-
-    # ---- Fig. 3: SOC da planta (C2) ----
-    plt.figure(figsize=FIGSIZE)
-    plt.plot(horas, resultados["C2"]["soc"] * 100, color='tab:blue', label='Plant SOC')
-    plt.axhline(10, color='tab:blue', label='MPC lower target')
-    plt.axhline(90, color='tab:blue', label='MPC upper target')
-    plt.xlabel('Time (h)')
-    plt.ylabel('State of charge (%)')
-    plt.xticks(TICKS_168)
-    plt.ylim(0, 100)
-    plt.legend(loc='best')
-    plt.tight_layout()
-    plt.savefig('fig_soc_closed_loop.pdf', bbox_inches='tight')
-    plt.savefig('fig_soc_closed_loop.png', bbox_inches='tight')
-    plt.close()
-
-    # ---- Fig. 4: Balanço de potências (C2), 72 h ----
-    h72 = horas[:72]
-    pv_kw = irradiancia_real[:72] * PV_PLANTA_KW / 1000.0
-    load_kw = -carga_real[:72] / 1000.0  
-    bat_kw = resultados["C2"]["bat"][:72] / 1000.0
-    bat_descarga = np.maximum(bat_kw, 0)  
-    bat_carga = np.minimum(bat_kw, 0)     
-    grid_kw = resultados["C2"]["grid"][:72] / 1000.0
-    grid_importacao = np.maximum(grid_kw, 0) 
-    grid_exportacao = np.minimum(grid_kw, 0) 
-
-    fig, ax = plt.subplots(figsize=(8, 4.5)) 
-    largura_barra = 1.0
-    estilo_borda = {'edgecolor': 'white', 'linewidth': 0.4, 'zorder': 3}
-
-    cor_pv = '#E6A01D'       
-    cor_bat_desc = '#7FB97A' 
-    cor_bat_carg = '#2A7A3E' 
-    cor_grid_imp = '#D9534F' 
-    cor_grid_exp = '#5BC0DE' 
-    cor_carga = '#333333'    
     
-    ax.bar(h72, pv_kw, color=cor_pv, label='PV Generation', width=largura_barra, **estilo_borda)
-    ax.bar(h72, bat_descarga, bottom=pv_kw, color=cor_bat_desc, label='BESS Discharge', width=largura_barra, **estilo_borda)
-    ax.bar(h72, grid_importacao, bottom=pv_kw + bat_descarga, color=cor_grid_imp, label='Grid Import', width=largura_barra, **estilo_borda)
-    
-    ax.bar(h72, load_kw, color=cor_carga, label='Local Load', width=largura_barra, **estilo_borda)
-    ax.bar(h72, bat_carga, bottom=load_kw, color=cor_bat_carg, label='BESS Charge', width=largura_barra, **estilo_borda)
-    ax.bar(h72, grid_exportacao, bottom=load_kw + bat_carga, color=cor_grid_exp, label='Grid Export', width=largura_barra, **estilo_borda)
-    
-    ax.set_xlabel('Time (h)')
-    ax.set_ylabel('Power (kW)')
-    ax.axhline(0, color='black', linewidth=1.2, zorder=4)
-    ax.set_xlim(-0.5, 71.5)
-    ax.set_xticks(np.arange(0, 73, 12))
-    ax.grid(axis='y', linestyle='--', linewidth=0.5, alpha=0.7, zorder=0)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.legend(loc='center left', bbox_to_anchor=(1.02, 0.5), frameon=False)
-    
-    plt.tight_layout()
-    plt.savefig('fig_power_72h.pdf', bbox_inches='tight')
-    plt.savefig('fig_power_72h.png', bbox_inches='tight') 
-    plt.close()
+    gerar_graficos(horas, carga_real, carga_predicao,
+                   irradiancia_real, irradiancia_predicao, resultados)
 
-    # ---- Fig. 5: Custo acumulado (a) + Economia acumulada vs C0 (b) ----
-    c0 = resultados["C0"]["cumcost"]
-    c1 = resultados["C1"]["cumcost"]
-    c2 = resultados["C2"]["cumcost"]
-    c3 = resultados["C3"]["cumcost"] 
-    
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6.4, 5.4), sharex=True,
-                                   gridspec_kw={"height_ratios": [1.2, 1]})
-                                   
-    ax1.plot(horas, c0, color='tab:blue',   label='C0: no BESS')
-    ax1.plot(horas, c3, color='tab:purple', label='C3: rule-based (Classic BESS)')
-    ax1.plot(horas, c2, color='tab:orange', label='C2: uncertain/mismatched MPC')
-    ax1.plot(horas, c1, color='tab:green',  label='C1: perfect/matched MPC')
-    ax1.set_ylabel('Cumulative net cost (R$)')
-    ax1.legend(loc='best')
-    ax1.set_title('(a) Cumulative net cost', fontsize=10)
-
-    ax2.plot(horas, c0 - c3, color='tab:purple', label='C3: rule-based (Classic BESS)')
-    ax2.plot(horas, c0 - c2, color='tab:orange', label='C2: uncertain/mismatched MPC')
-    ax2.plot(horas, c0 - c1, color='tab:green',  label='C1: perfect/matched MPC')
-    ax2.axhline(0, color='gray', linewidth=0.8)
-    ax2.set_ylabel('Cumulative savings vs. C0 (R$)')
-    ax2.set_xlabel('Time (h)')
-    ax2.set_xticks(TICKS_168)
-    ax2.legend(loc='best')
-    ax2.set_title('(b) Savings relative to no BESS', fontsize=10)
-    
-    fig.tight_layout()
-    plt.savefig('fig_cumulative_cost_comparison.pdf', bbox_inches='tight')
-    plt.savefig('fig_cumulative_cost_comparison.png', bbox_inches='tight')
-    plt.close(fig)
-
-    print("\nExecução concluída. As 4 figuras vetoriais PDF foram geradas no diretório com sucesso.")
+    print("\nExecução concluída. Figuras PDF/PNG geradas no diretório.")
